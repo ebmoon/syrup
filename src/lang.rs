@@ -1,4 +1,4 @@
-use egg::{Id, Symbol, Language, FromOp};
+use egg::{Id, Symbol, Language, FromOp, Var, EGraph, Subst};
 use std::{
     convert::Infallible,
     fmt::{self, Debug, Display, Formatter},
@@ -20,7 +20,9 @@ pub enum Op {
     If,
     /// A function application
     Match,
-    /// An uninterpreted symbol
+    /// A variable
+    Var,
+    /// An uninterpreted function symbol
     Symbol(Symbol),
 }
 
@@ -29,6 +31,7 @@ impl Display for Op {
         let s = match self {
             Self::If => "if",
             Self::Match => "match",
+            Self::Var => "var",
 			Self::Bool(b) => {
                 return write!(f, "{}", b);
             }
@@ -50,6 +53,7 @@ impl FromStr for Op {
         let op = match input {
             "if" => Self::If,
             "match" => Self::Match,
+            "var" => Self::Var,
             input => input
                 .parse()
                 .map(Self::Int)
@@ -60,17 +64,25 @@ impl FromStr for Op {
     }
 }
 
+pub fn var(s: &str) -> Var {
+    s.parse().unwrap()
+}
+
+pub fn is_not_same_var(v1: Var, v2: Var) -> impl Fn(&mut EGraph<RewriteLang, ()>, Id, &Subst) -> bool {
+    move |egraph, _, subst| egraph.find(subst[v1]) != egraph.find(subst[v2])
+}
+
 /// An abstract syntax tree node representing an operation of type `Op` applied
 /// to arguments of type `T`.
 ///
 /// This type implements [`Language`] for arguments of type [`Id`].
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct AstNode<T = Id> {
+pub struct RewriteLang<T = Id> {
     operation: Op,
     args: Vec<T>,
 }
 
-impl<T> AstNode<T> {
+impl<T> RewriteLang<T> {
     /// Returns the operation the node represents.
     #[must_use]
     pub fn operation(&self) -> &Op {
@@ -101,14 +113,14 @@ impl<T> AstNode<T> {
         self.args.len()
     }
 
-    /// Converts an `AstNode<Op, T>` into an `AstNode<Op, U>` by applying a
+    /// Converts an `RewriteLang<T>` into an `RewriteLang<U>` by applying a
     /// function to each of its arguments.
     #[must_use]
-    pub fn map<U, F>(self, f: F) -> AstNode<U>
+    pub fn map<U, F>(self, f: F) -> RewriteLang<U>
     where
         F: FnMut(T) -> U,
     {
-        AstNode {
+        RewriteLang {
             operation: self.operation,
             args: self.args.into_iter().map(f).collect(),
         }
@@ -137,7 +149,7 @@ impl<T> AstNode<T> {
     }
 }
 
-impl<T> AstNode<T> {
+impl<T> RewriteLang<T> {
     /// Creates a node with the given operation and arguments.
     ///
     /// See also [`AstNode::into_parts`].
@@ -166,28 +178,28 @@ impl<T> AstNode<T> {
     }
 }
 
-impl<T> AsRef<[T]> for AstNode<T> {
+impl<T> AsRef<[T]> for RewriteLang<T> {
     /// Returns a reference to the operation's arguments.
     fn as_ref(&self) -> &[T] {
         self.args()
     }
 }
 
-impl<T> AsRef<Op> for AstNode<T> {
+impl<T> AsRef<Op> for RewriteLang<T> {
     /// Returns a reference to the node's operation.
     fn as_ref(&self) -> &Op {
         self.operation()
     }
 }
 
-impl<T> AsMut<[T]> for AstNode<T> {
+impl<T> AsMut<[T]> for RewriteLang<T> {
     /// Returns a reference which allows modifying the operation's arguments.
     fn as_mut(&mut self) -> &mut [T] {
         self.args_mut()
     }
 }
 
-impl<'a, T> IntoIterator for &'a AstNode<T> {
+impl<'a, T> IntoIterator for &'a RewriteLang<T> {
     type Item = &'a T;
 
     type IntoIter = slice::Iter<'a, T>;
@@ -197,7 +209,7 @@ impl<'a, T> IntoIterator for &'a AstNode<T> {
     }
 }
 
-impl<'a, T> IntoIterator for &'a mut AstNode<T> {
+impl<'a, T> IntoIterator for &'a mut RewriteLang<T> {
     type Item = &'a mut T;
 
     type IntoIter = slice::IterMut<'a, T>;
@@ -207,7 +219,7 @@ impl<'a, T> IntoIterator for &'a mut AstNode<T> {
     }
 }
 
-impl<T> IntoIterator for AstNode<T> {
+impl<T> IntoIterator for RewriteLang<T> {
     type Item = T;
 
     type IntoIter = vec::IntoIter<T>;
@@ -218,7 +230,7 @@ impl<T> IntoIterator for AstNode<T> {
     }
 }
 
-impl Language for AstNode
+impl Language for RewriteLang
 where
     Op: Ord + Debug + Clone + Hash,
 {
@@ -291,7 +303,7 @@ pub enum ParseNodeError<E> {
     ParseError(E),
 }
 
-impl FromOp for AstNode
+impl FromOp for RewriteLang
 {
     type Error = ParseNodeError<<Op as FromStr>::Err>;
 
@@ -305,7 +317,7 @@ impl FromOp for AstNode
 /// display only a node's operation, not its children. This implementation is
 /// unexpected, so we only implement [`Display`] for the concrete type
 /// [`AstNode<Op, Id>`].
-impl Display for AstNode {
+impl Display for RewriteLang {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         std::fmt::Display::fmt(&self.operation, f)
     }
